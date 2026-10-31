@@ -142,6 +142,11 @@ class IapLightWeightWebsocket(object):
     # TODO(b/276477340): Find a better solution than to use locks as this code
     # does seem to decrease performance by ~3%.
     self.send_write_lock = threading.Lock()
+    # Only the reader (run_forever) frees the fd; other threads only shutdown().
+    # Closing mid-read lets another file reuse the fd number OpenSSL still
+    # holds. _fd_state_lock guards _reader_thread.
+    self._fd_state_lock = threading.Lock()
+    self._reader_thread = None
 
   def recv(self):
     """Receives data from the server."""
@@ -191,15 +196,46 @@ class IapLightWeightWebsocket(object):
     if self.connected and self.sock:
       try:
         self.send_close(close_code, close_message)
-        self.sock.close()
-        self.sock = None
-        self.connected = False
+        self._release_socket()
       except (websocket_exceptions.WebSocketConnectionClosedException,
               socket.error) as e:
         # We don't throw the error if it's a socket closed exception,
         # this is to avoid the caller breaking due to calling close too much
         if not self._is_closed_connection_exception(e):
           raise
+
+  def _release_socket(self):
+    """Stops using the socket and frees its fd once no thread can use it."""
+    sock = self.sock
+    if sock is None:
+      return
+    self.connected = False
+    try:
+      # Wakes a blocked reader or writer without freeing the fd. Uses
+      # socket.socket.shutdown because SSLSocket.shutdown drops the SSL layer.
+      socket.socket.shutdown(sock, socket.SHUT_RDWR)
+    except Exception:  # pylint: disable=broad-except
+      pass
+    with self._fd_state_lock:
+      reader = self._reader_thread
+      if reader is not None and reader is not threading.current_thread():
+        # The reader frees the fd when it leaves run_forever.
+        return
+    self._close_socket()
+
+  def _close_socket(self):
+    """Closes the socket; safe to call more than once."""
+    # Writers touch self.sock only under send_write_lock, so once it is None
+    # none can start or still be running.
+    with self.send_write_lock:
+      sock = self.sock
+      self.sock = None
+      self.connected = False
+    if sock is not None:
+      try:
+        sock.close()
+      except OSError:
+        pass
 
   def send_close(self, close_code=CLOSE_STATUS_NORMAL, close_message=six.b("")):
     """Sends a close message to the server but don't close."""
@@ -226,6 +262,18 @@ class IapLightWeightWebsocket(object):
 
   def run_forever(self, sslopt, **options):
     """Main method that will stay running while the connection is open."""
+    with self._fd_state_lock:
+      self._reader_thread = threading.current_thread()
+    try:
+      self._run_forever(sslopt, **options)
+    finally:
+      with self._fd_state_lock:
+        self._reader_thread = None
+      # This thread has stopped reading, so the fd can be freed now.
+      self._close_socket()
+
+  def _run_forever(self, sslopt, **options):
+    """Reader loop; run_forever frees the socket after it returns."""
     try:
       options.update({"header": self.header})
       options.update({"subprotocols": self.subprotocols})

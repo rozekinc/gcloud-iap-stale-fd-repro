@@ -1,0 +1,58 @@
+# Side-by-side fuzz of the gcloud IAP stale-fd race. A and B have no network at all;
+# the fake relay runs on each container's own loopback. Only the UI is published, on 127.0.0.1.
+# The containers stay up and idle; start/stop/intensity are driven from the UI.
+name: gcloud-fdrace
+
+x-fuzz: &fuzz
+  network_mode: none
+  cpus: ${FUZZ_CPUS:-1}
+  mem_limit: ${FUZZ_MEM:-512m}
+  memswap_limit: ${FUZZ_MEM:-512m}
+  pids_limit: 256
+  restart: unless-stopped
+  tmpfs: ["/state:size=64m"]
+  volumes:
+    - ./fuzz:/fuzz:ro
+    - ./results:/results
+    - ./control:/control:ro
+  entrypoint: ["/google-cloud-sdk/platform/bundledpythonunixmusl/bin/python3", "/fuzz/harness.py"]
+
+x-vars: &vars
+  PYTHONPATH: /fuzz/inject
+  PYTHONDONTWRITEBYTECODE: "1"
+  CLOUDSDK_CONFIG: /state/cfg
+  FUZZ_READ_DELAY_MS: ${FUZZ_READ_DELAY_MS:-40}
+
+services:
+  a:
+    <<: *fuzz
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:590.0.1-alpine
+    pull_policy: never
+    environment: { <<: *vars, SIDE: A }
+  b:
+    <<: *fuzz
+    image: gcloud-fdrace-patched:590.0.1
+    pull_policy: never
+    build: { context: ./fuzz/patched, pull: false }
+    environment: { <<: *vars, SIDE: B }
+  ui:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:590.0.1-alpine
+    pull_policy: never
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+    read_only: true
+    tmpfs: ["/tmp:size=8m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # Writes control/ and truncates results/ on host bind mounts it may not own.
+    cap_add: [DAC_OVERRIDE]
+    ports: ["127.0.0.1:8099:8099"]
+    volumes:
+      - ./fuzz/ui:/ui:ro
+      - ./fuzz/inject:/fuzz/inject:ro
+      - ./results:/results
+      - ./control:/control
+    entrypoint: ["/google-cloud-sdk/platform/bundledpythonunixmusl/bin/python3", "-I", "/ui/server.py"]

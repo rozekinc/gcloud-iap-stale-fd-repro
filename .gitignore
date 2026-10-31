@@ -1,0 +1,7 @@
+results/
+control/
+tools/
+scratch-src/
+.claude/
+__pycache__/
+.DS_Store

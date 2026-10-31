@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>gcloud IAP stale-fd race · A/B fuzz</title>
+<style>
+  :root {
+    --surface: #1a1a19; --card: #232322; --line: #333331;
+    --ink: #ecebe8; --ink-2: #b4b2ad; --muted: #85837e;
+    --good: #0ca30c; --critical: #d03b3b; --neutral: #5d5b57;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--ink);
+         font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  header { padding: 20px 28px 8px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  #verdict { margin: 8px 28px 0; padding: 12px 16px; border-radius: 8px; font-weight: 600;
+             display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); }
+  #verdict.good { border-color: var(--good); }
+  #verdict.bad { border-color: var(--critical); background: #2a1716; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 28px 28px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .card h2 { margin: 0 0 2px; font-size: 16px; font-weight: 600; }
+  .card .tag { color: var(--ink-2); font-size: 13px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+  .tile .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .tile .v { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .s { color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .status { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 600; }
+  .strip-h { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 4px; }
+  svg.strip { width: 100%; height: 34px; display: block; margin-top: 6px; }
+  .legend { display: flex; gap: 14px; color: var(--ink-2); font-size: 12px; margin-top: 6px; }
+  .legend span { display: inline-flex; gap: 5px; align-items: center; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  pre { background: #151514; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-2);
+        white-space: pre-wrap; word-break: break-all; margin: 6px 0 0; }
+  .label { color: var(--muted); font-size: 12px; margin-top: 14px; }
+  #ctl { margin: 10px 28px 0; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  #ctl .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--ink-2); border: 0; border-right: 1px solid var(--line);
+                padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button:hover { background: #2c2c2a; color: var(--ink); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+  #ctl .hint { color: var(--muted); font-size: 12px; }
+  .btn { background: var(--ink); color: var(--surface); border: 0; border-radius: 8px; padding: 8px 16px;
+         font: inherit; font-weight: 600; cursor: pointer; }
+  .btn.stop { background: transparent; color: var(--ink); border: 1px solid var(--ink-2); }
+  .btn.ghost { background: transparent; color: var(--ink-2); border: 1px solid var(--line); font-weight: 400; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  #res { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 12px 28px 0; }
+  @media (max-width: 900px) { #res { grid-template-columns: 1fr; } }
+  .rc { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: 12px; }
+  .rc h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; }
+  .rc h3 span { color: var(--muted); font-weight: 400; }
+  .meter { display: grid; grid-template-columns: 54px 1fr 150px; gap: 8px; align-items: center; margin: 4px 0;
+           color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; background: #151514; border-radius: 4px; overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 4px; background: var(--ink-2); }
+  .bar i.hot { background: var(--critical); }
+  .rc .foot { color: var(--muted); margin-top: 4px; }
+  #tip { position: fixed; pointer-events: none; background: #0f0f0e; border: 1px solid var(--line);
+         color: var(--ink); padding: 4px 8px; border-radius: 4px; font-size: 12px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>gcloud IAP stale-fd race — side-by-side fuzz</h1>
+  <span class="sub">A = gcloud 590.0.1 unpatched · B = same image + patched iap_tunnel_lightweight_websocket.py · same injection · no network</span>
+</header>
+<div id="ctl">
+  <button id="run" class="btn">▶ Start</button>
+  <span id="state" class="status" style="color:var(--muted)">● stopped</span>
+  <span class="k" style="margin-left:10px">intensity</span>
+  <span class="seg" role="group" aria-label="intensity">
+    <button data-level="low">Low · overnight</button>
+    <button data-level="medium">Medium</button>
+    <button data-level="high">High · quick run</button>
+  </span>
+  <span class="hint" id="hint"></span>
+  <button id="clear" class="btn ghost" style="margin-left:auto" title="Only while stopped">Clear results</button>
+</div>
+<div id="res"></div>
+<div id="verdict"><span class="dot"></span><span>waiting for results…</span></div>
+<main id="cols"></main>
+<div id="tip"></div>
+<script>
+const C = { o: "var(--good)", f: "var(--critical)", e: "var(--neutral)" };
+const LABEL = { o: "ok", f: "DB corrupted", e: "harness error" };
+
+function ago(t, now) {
+  if (!t) return "never";
+  let s = Math.max(0, Math.round(now - t));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s ago";
+  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m ago";
+}
+function dur(a, b) {
+  if (!a || !b) return "—";
+  let s = Math.round(b - a);
+  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m " + (s % 60) + "s";
+}
+function hexdump(h) {
+  if (!h) return "";
+  let out = [];
+  for (let i = 0; i < h.length; i += 32) {
+    let row = h.slice(i, i + 32).match(/../g);
+    out.push(String(i / 2).padStart(4, "0") + "  " + row.join(" "));
+  }
+  return out.join("\n");
+}
+function perMin(s, now) {
+  return s.per_min ?? s.strip.filter(c => now - c.t <= 60).length;
+}
+const HINT = {
+  low: "1 iteration / ~2 s per side, light background DB churn",
+  medium: "~4 iterations / s per side",
+  high: "flat out, up to each container's CPU cap",
+};
+let running = false;
+async function control(body) {
+  const r = await fetch("/api/control", { method: "POST", headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify(body) });
+  if (r.ok) showControl(await r.json());
+  tick();
+}
+function showControl(c) {
+  running = c.running;
+  document.querySelectorAll(".seg button").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.level === c.level)));
+  document.getElementById("hint").textContent = HINT[c.level] || "";
+  const run = document.getElementById("run");
+  run.textContent = running ? "■ Stop" : "▶ Start";
+  run.className = running ? "btn stop" : "btn";
+  const st = document.getElementById("state");
+  st.textContent = running ? "● running" : "● stopped (idle)";
+  st.style.color = running ? "var(--good)" : "var(--muted)";
+  document.getElementById("clear").disabled = running;
+}
+document.getElementById("run").addEventListener("click", () => control({ action: running ? "stop" : "start" }));
+document.getElementById("clear").addEventListener("click", () => {
+  if (confirm("Clear A and B results?")) control({ action: "clear" });
+});
+document.querySelectorAll(".seg button").forEach(b =>
+  b.addEventListener("click", () => control({ action: "level", level: b.dataset.level })));
+
+function mib(b) { return b == null ? "—" : (b / 1048576).toFixed(0) + " MiB"; }
+function meter(label, used, cap, text) {
+  const pct = used != null && cap ? Math.min(100, 100 * used / cap) : 0;
+  return `<div class="meter"><span>${label}</span>
+    <div class="bar" role="meter" aria-valuenow="${pct.toFixed(0)}" aria-valuemin="0" aria-valuemax="100">
+      <i class="${pct >= 90 ? "hot" : ""}" style="width:${pct.toFixed(1)}%"></i></div><span>${text}</span></div>`;
+}
+function resources(cs, now) {
+  return Object.entries(cs).map(([name, s]) => {
+    if (!s) return `<div class="rc"><h3>${name}<span>no stats</span></h3></div>`;
+    const stale = now - s.t > 10;
+    const cpuTxt = s.cpu == null ? "—" : `${(s.cpu * 100).toFixed(0)}% of ${s.cpu_cap ? (s.cpu_cap * 100).toFixed(0) + "%" : "no cap"}`;
+    const memTxt = `${mib(s.mem)} / ${s.mem_max ? mib(s.mem_max) : "no cap"}`;
+    return `<div class="rc"><h3>${name}<span>${stale ? "stale · " + ago(s.t, now) : "live"}</span></h3>
+      ${meter("CPU", s.cpu, s.cpu_cap || 1, cpuTxt)}
+      ${meter("memory", s.mem, s.mem_max, memTxt)}
+      <div class="foot">peak ${mib(s.mem_peak)} · pids ${s.pids ?? "—"} / ${s.pids_max ?? "∞"} ·
+        OOM kills ${s.oom_kills ?? 0}${s.oom_kills ? " ⚠" : ""}</div></div>`;
+  }).join("");
+}
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+function strip(cells) {
+  const n = 500, w = 1000, cw = w / n;
+  let r = "";
+  cells.forEach((c, k) => {
+    const x = (n - cells.length + k) * cw;
+    r += `<rect x="${x.toFixed(2)}" y="2" width="${Math.max(cw - 0.6, 0.6).toFixed(2)}" height="30" rx="0.6"
+            fill="${C[c.s]}" data-tip="#${c.i} · ${LABEL[c.s]} · ${new Date(c.t * 1000).toLocaleTimeString()}"></rect>`;
+  });
+  return `<svg class="strip" viewBox="0 0 ${w} 34" preserveAspectRatio="none" role="img"
+            aria-label="last ${cells.length} iterations">${r}</svg>`;
+}
+
+function card(s, now) {
+  const rate = s.iters ? (100 * s.fails / s.iters) : 0;
+  const role = s.name === "A" ? "unpatched — expected to fail" : "patched — expected to stay clean";
+  const patchNote = s.patched === null ? "" : (s.patched ? "patch loaded ✓" : "original code ✓");
+  const bad = s.fails > 0;
+  const st = s.name === "B"
+    ? (bad ? `<span class="status" style="color:var(--critical)">✕ B FAILED</span>`
+           : `<span class="status" style="color:var(--good)">✓ no failures</span>`)
+    : (bad ? `<span class="status" style="color:var(--ink)">✕ reproduces</span>`
+           : `<span class="status" style="color:var(--muted)">– no repro yet</span>`);
+  const lf = s.last_fail;
+  return `<section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <div><h2>${s.name}</h2><div class="tag">${role} · ${patchNote} · delay ${s.delay_ms ?? "?"} ms</div></div>${st}
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="k">iterations</div><div class="v">${s.iters.toLocaleString()}</div>
+        <div class="s">${perMin(s, now)}/min now · span ${dur(s.first_t, s.last_t)}</div></div>
+      <div class="tile"><div class="k">failures</div><div class="v">${s.fails.toLocaleString()}</div>
+        <div class="s">DB corrupted</div></div>
+      <div class="tile"><div class="k">failure rate</div><div class="v">${rate.toFixed(1)}%</div>
+        <div class="s">stale fd reads ${s.stale.toLocaleString()}</div></div>
+      <div class="tile"><div class="k">last failure</div><div class="v" style="font-size:18px;padding-top:6px">${ago(s.last_fail_t, now)}</div>
+        <div class="s">harness errors ${s.errors} · restarts ${Math.max(0, s.starts - 1)}</div></div>
+    </div>
+    <div class="strip-h"><span>last ${s.strip.length} iterations (oldest → newest)</span><span>${ago(s.last_t, now)}</span></div>
+    ${strip(s.strip)}
+    <div class="legend"><span><i class="sw" style="background:var(--good)"></i>ok</span>
+      <span><i class="sw" style="background:var(--critical)"></i>DB corrupted</span>
+      <span><i class="sw" style="background:var(--neutral)"></i>harness error</span></div>
+    <div class="label">last failure — first 64 bytes of &lt;config&gt;_configs.db</div>
+    <pre>${lf ? esc(`#${lf.i} at ${new Date(lf.t * 1000).toLocaleString()}` +
+      (lf.tls_off !== undefined ? ` · TLS record 17 03 03 at offset ${lf.tls_off}` : "") +
+      (lf.quick_check ? ` · ${lf.quick_check}` : "") + "\n" + hexdump(lf.head_hex)) : "none"}</pre>
+    ${s.last_err ? `<div class="label">last harness error</div><pre>${esc(s.last_err)}</pre>` : ""}
+  </section>`;
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    const d = await r.json();
+    showControl(d.control);
+    document.getElementById("res").innerHTML = resources(d.containers, d.now);
+    document.getElementById("cols").innerHTML = d.sides.map(s => card(s, d.now)).join("");
+    const [A, B] = d.sides;
+    const v = document.getElementById("verdict");
+    if (B.fails > 0) {
+      v.className = "bad";
+      v.innerHTML = `<span class="dot" style="background:var(--critical)"></span>✕ Patched side B failed ${B.fails}× — the patch does not hold`;
+    } else if (B.iters > 0 && A.fails > 0) {
+      v.className = "good";
+      v.innerHTML = `<span class="dot" style="background:var(--good)"></span>✓ B clean after ${B.iters.toLocaleString()} iterations · A failed ${A.fails.toLocaleString()} / ${A.iters.toLocaleString()}`;
+    } else if (B.iters > 0) {
+      v.className = "";
+      v.innerHTML = `<span class="dot" style="background:var(--neutral)"></span>A not reproducing yet · B result inconclusive`;
+    } else {
+      v.className = "";
+      v.innerHTML = `<span class="dot"></span>waiting for results…`;
+    }
+  } catch (e) { /* server restarting */ }
+}
+document.addEventListener("mousemove", ev => {
+  const t = ev.target.getAttribute && ev.target.getAttribute("data-tip"), tip = document.getElementById("tip");
+  if (t) { tip.textContent = t; tip.style.display = "block"; tip.style.left = ev.clientX + 12 + "px"; tip.style.top = ev.clientY + 12 + "px"; }
+  else tip.style.display = "none";
+});
+tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>
