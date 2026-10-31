@@ -2,6 +2,8 @@
 
 Offline side-by-side repro of a gcloud IAP tunnel race that corrupts the local configs DB. See [USAGE.md](USAGE.md).
 
+![The race, unpatched next to patched](media/race-timing.gif)
+
 ## How it shows up
 
 We run many `gcloud compute start-iap-tunnel` sessions from one host to many machines, and SSH connections through
@@ -16,11 +18,11 @@ fd number is freed, gcloud reopens its configs DB on the same number, and OpenSS
 DB header as a bad TLS record and writes an alert into the file. The more tunnels open and close, the more often it
 happens.
 
-## Videos
+## The fuzz UI
 
-- [race-timing.mp4](media/race-timing.mp4): the race step by step, unpatched next to patched.
-- The fuzz UI at three intensities: [low](media/ui-low.mov), [medium](media/ui-medium.mov),
-  [high](media/ui-high.mov).
+![Fuzz UI at high intensity](media/ui-high.gif)
+
+Also at [low](media/ui-low.gif) and [medium](media/ui-medium.gif) intensity.
 
 ## Built with Claude
 
