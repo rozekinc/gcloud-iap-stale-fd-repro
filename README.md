@@ -29,3 +29,6 @@ Also at [low](media/ui-low.gif) and [medium](media/ui-medium.gif) intensity.
 This was done together with [Claude Code](https://claude.com/claude-code). Claude analysed the strace evidence, drafted
 the patch, built the offline fuzz and UI, and had a second model audit the code and prose. We checked each claim
 against a reproduction before keeping it.
+
+## Overnight run
+<img width="1702" height="723" alt="Screenshot 2026-11-02 at 17 15 45" src="https://github.com/user-attachments/assets/34135938-7509-4dce-ac1a-f1e2899601c7" />
